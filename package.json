@@ -11,9 +11,7 @@
   },
   "dependencies": {
     "astro": "^5.6.1",
-    "@astrojs/cloudflare": "^12.2.1",
-    "@ffmpeg/ffmpeg": "0.12.15",
-    "@ffmpeg/core": "0.12.10"
+    "@astrojs/cloudflare": "^12.2.1"
   },
   "devDependencies": {
     "wrangler": "^4.10.0"

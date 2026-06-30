@@ -1,13 +1,5 @@
 ---
 import Layout from "../layouts/Layout.astro";
-
-// ffmpeg.wasm é servido pela MESMA ORIGEM (evita o bloqueio de scripts externos
-// via CSP do Webflow Cloud). Os arquivos vêm do npm e são copiados para
-// /public/ffmpeg durante o build (ver astro.config.mjs). `ffmpegBase` respeita
-// o mount path configurado.
-const base = import.meta.env.BASE_URL || "/";
-const b = base.endsWith("/") ? base.slice(0, -1) : base;
-const ffmpegBase = b + "/ffmpeg";
 ---
 
 <Layout>
@@ -570,10 +562,8 @@ const ffmpegBase = b + "/ffmpeg";
   }
 </style>
 
-<!-- Motor de conversão (ffmpeg.wasm) — servido pela própria origem do app -->
-<script is:inline src={`${ffmpegBase}/ffmpeg.js`}></script>
-
-<script define:vars={{ ffmpegBase }}>
+<!-- Lógica do app + motor de conversão (ffmpeg.wasm, carregado do CDN em runtime) -->
+<script is:inline>
   (function () {
     "use strict";
 
@@ -605,8 +595,11 @@ const ffmpegBase = b + "/ffmpeg";
     var files = [];
     var idSeq = 0;
     var selectedPreset = "equilibrado";
-    var ffmpeg = null;
-    var ffmpegLoadingPromise = null;
+    var engine = null;
+    var engineLoadingPromise = null;
+    var ffWorker = null;
+    var ffMsgId = 0;
+    var ffPending = {};
     var currentProgressCb = null;
     var converting = false;
     var results = []; // { name, blob, url }
@@ -676,32 +669,79 @@ const ffmpegBase = b + "/ffmpeg";
     }
 
     // ---- Carrega o ffmpeg.wasm (uma vez só) ----
-    function loadFFmpeg(onStatus) {
-      if (ffmpeg) return Promise.resolve(ffmpeg);
-      if (ffmpegLoadingPromise) return ffmpegLoadingPromise;
+    // ffmpeg.wasm é carregado do CDN (unpkg) e convertido em blobs de mesma
+    // origem. O worker é criado a partir desse blob (worker clássico same-origin),
+    // o que funciona no Webflow Cloud sem precisar hospedar o .wasm de ~30 MB
+    // (que excede o limite de tamanho de assets do Cloudflare).
+    var FF_BASE = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/umd";
+    var CORE_BASE = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
 
-      ffmpegLoadingPromise = (async function () {
-        if (!window.FFmpegWASM || !window.FFmpegWASM.FFmpeg) {
-          throw new Error("Não foi possível carregar o motor de conversão. Recarregue a página e tente novamente.");
-        }
-        var FFmpeg = window.FFmpegWASM.FFmpeg;
-        var inst = new FFmpeg();
+    function ffCall(type, data, transfer) {
+      return new Promise(function (resolve, reject) {
+        var id = ++ffMsgId;
+        ffPending[id] = { resolve: resolve, reject: reject };
+        ffWorker.postMessage({ id: id, type: type, data: data }, transfer || []);
+      });
+    }
+
+    function loadFFmpeg(onStatus) {
+      if (engine) return Promise.resolve(engine);
+      if (engineLoadingPromise) return engineLoadingPromise;
+
+      engineLoadingPromise = (async function () {
         if (onStatus) onStatus("Preparando o motor de conversão (só na primeira vez)…");
-        // Worker clássico é carregado pela lib na mesma origem (o publicPath vem
-        // do <script src=".../ffmpeg/ffmpeg.js">). Core e wasm viram blobs
-        // same-origin — sem classWorkerURL e sem depender de CDN externo.
-        await inst.load({
-          coreURL: await toBlobURL(ffmpegBase + "/ffmpeg-core.js", "text/javascript"),
-          wasmURL: await toBlobURL(ffmpegBase + "/ffmpeg-core.wasm", "application/wasm"),
-        });
-        inst.on("progress", function (e) {
-          if (currentProgressCb) currentProgressCb(e);
-        });
-        ffmpeg = inst;
-        return inst;
+        var workerURL = await toBlobURL(FF_BASE + "/814.ffmpeg.js", "text/javascript");
+        var w = new Worker(workerURL);
+
+        w.onmessage = function (ev) {
+          var d = ev.data;
+          if (!d) return;
+          if (d.type === "PROGRESS") {
+            if (currentProgressCb) currentProgressCb(d.data);
+            return;
+          }
+          if (d.type === "LOG") return;
+          var p = ffPending[d.id];
+          if (!p) return;
+          delete ffPending[d.id];
+          if (d.type === "ERROR") {
+            p.reject(new Error(typeof d.data === "string" ? d.data : "Erro no motor de conversão."));
+          } else {
+            p.resolve(d.data);
+          }
+        };
+        w.onerror = function (ev) {
+          var keys = Object.keys(ffPending);
+          for (var i = 0; i < keys.length; i++) {
+            ffPending[keys[i]].reject(new Error("Falha no motor de conversão" + (ev && ev.message ? ": " + ev.message : ".")));
+            delete ffPending[keys[i]];
+          }
+        };
+
+        ffWorker = w;
+        var coreURL = await toBlobURL(CORE_BASE + "/ffmpeg-core.js", "text/javascript");
+        var wasmURL = await toBlobURL(CORE_BASE + "/ffmpeg-core.wasm", "application/wasm");
+        await ffCall("LOAD", { coreURL: coreURL, wasmURL: wasmURL });
+
+        // Interface mínima compatível com o restante do código.
+        engine = {
+          writeFile: function (path, data) {
+            return ffCall("WRITE_FILE", { path: path, data: data }, data && data.buffer ? [data.buffer] : []);
+          },
+          exec: function (args) {
+            return ffCall("EXEC", { args: args, timeout: -1 });
+          },
+          readFile: function (path) {
+            return ffCall("READ_FILE", { path: path, encoding: "binary" });
+          },
+          deleteFile: function (path) {
+            return ffCall("DELETE_FILE", { path: path });
+          }
+        };
+        return engine;
       })();
 
-      return ffmpegLoadingPromise;
+      return engineLoadingPromise;
     }
 
     // ---- Converte um arquivo ----
