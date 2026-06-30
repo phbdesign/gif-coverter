@@ -1,5 +1,13 @@
 ---
 import Layout from "../layouts/Layout.astro";
+
+// ffmpeg.wasm é servido pela MESMA ORIGEM (evita o bloqueio de scripts externos
+// via CSP do Webflow Cloud). Os arquivos vêm do npm e são copiados para
+// /public/ffmpeg durante o build (ver astro.config.mjs). `ffmpegBase` respeita
+// o mount path configurado.
+const base = import.meta.env.BASE_URL || "/";
+const b = base.endsWith("/") ? base.slice(0, -1) : base;
+const ffmpegBase = b + "/ffmpeg";
 ---
 
 <Layout>
@@ -562,11 +570,10 @@ import Layout from "../layouts/Layout.astro";
   }
 </style>
 
-<!-- Motor de conversão (ffmpeg.wasm) carregado do CDN -->
-<script is:inline src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.js"></script>
-<script is:inline src="https://unpkg.com/@ffmpeg/util@0.12.2/dist/umd/index.js"></script>
+<!-- Motor de conversão (ffmpeg.wasm) — servido pela própria origem do app -->
+<script is:inline src={`${ffmpegBase}/ffmpeg.js`}></script>
 
-<script is:inline>
+<script define:vars={{ ffmpegBase }}>
   (function () {
     "use strict";
 
@@ -577,9 +584,22 @@ import Layout from "../layouts/Layout.astro";
       nitido: { label: "Nítido", width: 720, fps: 15, colors: 200 },
     };
 
-    // URLs do ffmpeg.wasm (single-thread: não exige headers especiais)
-    var FF_BASE = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/umd";
-    var CORE_BASE = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
+    // Helpers que substituem o @ffmpeg/util (que não expõe um global confiável).
+    function toBlobURL(url, mime) {
+      return fetch(url)
+        .then(function (r) {
+          if (!r.ok) throw new Error("Falha ao baixar " + url + " (HTTP " + r.status + ")");
+          return r.arrayBuffer();
+        })
+        .then(function (buf) {
+          return URL.createObjectURL(new Blob([buf], { type: mime }));
+        });
+    }
+    function fetchFile(file) {
+      return file.arrayBuffer().then(function (buf) {
+        return new Uint8Array(buf);
+      });
+    }
 
     // ---- Estado ----
     var files = [];
@@ -661,17 +681,18 @@ import Layout from "../layouts/Layout.astro";
       if (ffmpegLoadingPromise) return ffmpegLoadingPromise;
 
       ffmpegLoadingPromise = (async function () {
-        if (!window.FFmpegWASM || !window.FFmpegUtil) {
-          throw new Error("Não foi possível carregar o motor de conversão. Verifique sua conexão e recarregue a página.");
+        if (!window.FFmpegWASM || !window.FFmpegWASM.FFmpeg) {
+          throw new Error("Não foi possível carregar o motor de conversão. Recarregue a página e tente novamente.");
         }
         var FFmpeg = window.FFmpegWASM.FFmpeg;
-        var toBlobURL = window.FFmpegUtil.toBlobURL;
         var inst = new FFmpeg();
         if (onStatus) onStatus("Preparando o motor de conversão (só na primeira vez)…");
+        // Worker clássico é carregado pela lib na mesma origem (o publicPath vem
+        // do <script src=".../ffmpeg/ffmpeg.js">). Core e wasm viram blobs
+        // same-origin — sem classWorkerURL e sem depender de CDN externo.
         await inst.load({
-          classWorkerURL: await toBlobURL(FF_BASE + "/814.ffmpeg.js", "text/javascript"),
-          coreURL: await toBlobURL(CORE_BASE + "/ffmpeg-core.js", "text/javascript"),
-          wasmURL: await toBlobURL(CORE_BASE + "/ffmpeg-core.wasm", "application/wasm"),
+          coreURL: await toBlobURL(ffmpegBase + "/ffmpeg-core.js", "text/javascript"),
+          wasmURL: await toBlobURL(ffmpegBase + "/ffmpeg-core.wasm", "application/wasm"),
         });
         inst.on("progress", function (e) {
           if (currentProgressCb) currentProgressCb(e);
@@ -686,7 +707,6 @@ import Layout from "../layouts/Layout.astro";
     // ---- Converte um arquivo ----
     async function convertOne(entry, onProgress, onStatus) {
       var ff = await loadFFmpeg(onStatus);
-      var fetchFile = window.FFmpegUtil.fetchFile;
       var p = PRESETS[selectedPreset];
 
       var meta = await getVideoMeta(entry.file);

@@ -23,8 +23,9 @@ A conversão acontece **100% no navegador** do usuário (via `ffmpeg.wasm`). Nen
 ## Tecnologia
 
 - **Astro 5** (`output: server`) com o adaptador **Cloudflare** (Edge runtime do Webflow Cloud)
-- **ffmpeg.wasm** single-thread, carregado via CDN — não exige headers `COOP/COEP`
-- Sem dependências de build extras; a interface é HTML/CSS/JS puro
+- **ffmpeg.wasm** single-thread, **auto-hospedado** (servido pela mesma origem do app). Os arquivos vêm do npm e são copiados para `public/ffmpeg/` durante o build (ver `astro.config.mjs`) — isso evita o bloqueio de scripts externos (CSP) do Webflow Cloud e não exige headers `COOP/COEP`
+- Worker clássico same-origin; sem dependência de CDN externo em runtime
+- A interface é HTML/CSS/JS puro (sem framework de UI)
 
 ## Rodar localmente (opcional)
 
