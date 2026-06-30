@@ -47,20 +47,33 @@ import Layout from "../layouts/Layout.astro";
         <div class="preset-grid" id="preset-grid" role="radiogroup" aria-label="Qualidade do GIF">
           <button class="preset" data-preset="compacto" role="radio" aria-checked="false" type="button">
             <div class="preset-name">Compacto</div>
-            <div class="preset-spec">400&nbsp;px · 10&nbsp;fps</div>
-            <div class="preset-desc">Menor tamanho de arquivo. Ideal para tiles pequenos e para incorporar o GIF direto no relatório.</div>
+            <div class="preset-spec">360&nbsp;px · 8&nbsp;fps</div>
+            <div class="preset-desc">Máxima leveza. Ideal para tiles pequenos e para incorporar o GIF direto no relatório.</div>
           </button>
           <button class="preset is-selected" data-preset="equilibrado" role="radio" aria-checked="true" type="button">
             <div class="preset-tag">Recomendado</div>
             <div class="preset-name">Equilibrado</div>
-            <div class="preset-spec">560&nbsp;px · 12&nbsp;fps</div>
-            <div class="preset-desc">Melhor relação entre tamanho e qualidade. Funciona bem na maioria dos dashboards.</div>
+            <div class="preset-spec">440&nbsp;px · 10&nbsp;fps</div>
+            <div class="preset-desc">Bem leve, mantendo boa qualidade visual. Funciona bem na maioria dos dashboards.</div>
           </button>
           <button class="preset" data-preset="nitido" role="radio" aria-checked="false" type="button">
             <div class="preset-name">Nítido</div>
-            <div class="preset-spec">720&nbsp;px · 15&nbsp;fps</div>
-            <div class="preset-desc">Mais definição e fluidez. Para visuais maiores — gera arquivos maiores.</div>
+            <div class="preset-spec">560&nbsp;px · 12&nbsp;fps</div>
+            <div class="preset-desc">Mais definição e fluidez, para visuais maiores. Ainda otimizado, mas gera arquivos maiores.</div>
           </button>
+        </div>
+
+        <!-- Opção secundária (discreta, desligada por padrão): limitar duração -->
+        <div class="adv-row">
+          <label class="adv-toggle" for="dur-toggle">
+            <input type="checkbox" id="dur-toggle" />
+            <span>Limitar duração do GIF</span>
+          </label>
+          <span class="adv-fields" id="dur-fields">
+            — usar os primeiros
+            <input type="number" id="dur-seconds" value="5" min="1" max="60" step="1" disabled />
+            segundos
+          </span>
         </div>
       </section>
 
@@ -356,6 +369,55 @@ import Layout from "../layouts/Layout.astro";
     line-height: 1.5;
   }
 
+  /* Opção secundária discreta (limitar duração) */
+  .adv-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin-top: 14px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .adv-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .adv-toggle input {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .adv-fields {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    opacity: 0.45;
+    transition: opacity 0.15s;
+  }
+  .adv-row.is-on .adv-fields {
+    opacity: 1;
+  }
+  .adv-fields input {
+    width: 54px;
+    padding: 4px 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: inherit;
+    font-size: 12.5px;
+    text-align: center;
+    color: var(--ink);
+    background: var(--card);
+  }
+  .adv-fields input:disabled {
+    background: #f3f4f8;
+    cursor: not-allowed;
+  }
+
   /* Buttons */
   .btn-primary {
     margin-top: 26px;
@@ -568,10 +630,13 @@ import Layout from "../layouts/Layout.astro";
     "use strict";
 
     // ---- Presets otimizados para Power BI ----
+    // Presets otimizados para Power BI (máxima leveza).
+    // dither "none" deixa o arquivo bem menor e melhora a compressão entre
+    // frames (cenas paradas viram quase nada). max_colors menor = mais leve.
     var PRESETS = {
-      compacto: { label: "Compacto", width: 400, fps: 10, colors: 64 },
-      equilibrado: { label: "Equilibrado", width: 560, fps: 12, colors: 128 },
-      nitido: { label: "Nítido", width: 720, fps: 15, colors: 200 },
+      compacto: { label: "Compacto", width: 360, fps: 8, colors: 32, dither: "none" },
+      equilibrado: { label: "Equilibrado", width: 440, fps: 10, colors: 48, dither: "none" },
+      nitido: { label: "Nítido", width: 560, fps: 12, colors: 96, dither: "none" },
     };
 
     // Helpers que substituem o @ffmpeg/util (que não expõe um global confiável).
@@ -603,6 +668,8 @@ import Layout from "../layouts/Layout.astro";
     var currentProgressCb = null;
     var converting = false;
     var results = []; // { name, blob, url }
+    var durationLimitEnabled = false;
+    var durationLimitSeconds = 5;
 
     // ---- Elementos ----
     var dropzone = document.getElementById("dropzone");
@@ -616,6 +683,9 @@ import Layout from "../layouts/Layout.astro";
     var resultsSection = document.getElementById("results-section");
     var resultsEl = document.getElementById("results");
     var downloadAllBtn = document.getElementById("download-all");
+    var durToggle = document.getElementById("dur-toggle");
+    var durSeconds = document.getElementById("dur-seconds");
+    var durRow = durToggle ? durToggle.closest(".adv-row") : null;
 
     // ---- Utilidades ----
     function formatBytes(n) {
@@ -771,9 +841,14 @@ import Layout from "../layouts/Layout.astro";
       var filter =
         "[0:v]fps=" + p.fps + ",scale=" + w + ":-2:flags=lanczos,split[a][b];" +
         "[a]palettegen=max_colors=" + p.colors + ":stats_mode=diff[p];" +
-        "[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle";
+        "[b][p]paletteuse=dither=" + (p.dither || "none") + ":diff_mode=rectangle";
 
-      await ff.exec(["-i", inName, "-filter_complex", filter, "-loop", "0", outName]);
+      var args = ["-i", inName, "-filter_complex", filter];
+      if (durationLimitEnabled && durationLimitSeconds > 0) {
+        args.push("-t", String(durationLimitSeconds));
+      }
+      args.push("-loop", "0", outName);
+      await ff.exec(args);
       currentProgressCb = null;
 
       var data = await ff.readFile(outName);
@@ -1045,6 +1120,25 @@ import Layout from "../layouts/Layout.astro";
 
     convertBtn.addEventListener("click", runConversion);
     downloadAllBtn.addEventListener("click", downloadAll);
+
+    // Controle secundário (limitar duração) — desligado por padrão
+    if (durToggle) {
+      durToggle.addEventListener("change", function () {
+        durationLimitEnabled = durToggle.checked;
+        if (durSeconds) durSeconds.disabled = !durToggle.checked;
+        if (durRow) durRow.classList.toggle("is-on", durToggle.checked);
+        if (durToggle.checked && durSeconds) durSeconds.focus();
+      });
+    }
+    if (durSeconds) {
+      durSeconds.addEventListener("input", function () {
+        var v = parseInt(durSeconds.value, 10);
+        if (isNaN(v)) return;
+        if (v < 1) v = 1;
+        if (v > 60) v = 60;
+        durationLimitSeconds = v;
+      });
+    }
 
     // estado inicial
     updateConvertBtn();
