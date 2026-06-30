@@ -1,0 +1,37 @@
+---
+// Layout base. Usa BASE_URL para o favicon funcionar tanto na raiz
+// quanto se o app for montado em um subcaminho no Webflow Cloud.
+const base = import.meta.env.BASE_URL || "/";
+const faviconHref = (base.endsWith("/") ? base.slice(0, -1) : base) + "/favicon.svg";
+---
+
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href={faviconHref} />
+    <meta
+      name="description"
+      content="Converta vídeos em GIFs otimizados para dashboards do Power BI. Conversão 100% no seu navegador."
+    />
+    <title>Vídeo → GIF para Power BI</title>
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>
+
+<style is:global>
+  :root {
+    color-scheme: light;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+  }
+</style>

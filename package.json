@@ -1,0 +1,19 @@
+{
+  "name": "video-to-gif-powerbi",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro build && wrangler dev",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "astro": "^5.6.1",
+    "@astrojs/cloudflare": "^12.2.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.10.0"
+  }
+}
